@@ -1,0 +1,475 @@
+import math
+
+PHI = (1 + math.sqrt(5)) / 2.0
+
+class DistinctionNode:
+    def __init__(self, label, state=0.0):
+        """
+        A minimal Distinction Node
+        """
+        self.label = label
+        self.state = state
+    
+    def __repr__(self):
+        return f"<DistinctionNode {self.label}, state={self.state:.3f}>"
+
+class ReferenceFrame:
+    def __init__(self, frame_id, origin_node=None, scale=1.0, phase_offset=0.0, logger=None):
+        """
+        Represents an Reference Frame, containing:
+          - a unique identifier
+          - a potential origin node
+          - scale and phase parameters
+          - a collection of DistinctionNodes
+          - associated boundaries
+          - linked frames for inter-frame interactions
+          - sub-frames for hierarchical structuring
+        """
+        self.frame_id = frame_id
+        self.origin_node = origin_node
+        self.scale = scale
+        self.phase_offset = phase_offset
+        
+        self.nodes = []
+        self.boundaries = []
+        self.linked_frames = []  # Frames linked for inter-frame interactions
+        self.sub_frames = []     # Nested frames
+        
+        self.logger = logger  # Logger function from the main scenario
+    
+    def add_node(self, node):
+        self.nodes.append(node)
+    
+    def add_boundary(self, boundary):
+        self.boundaries.append(boundary)
+    
+    def link_frame(self, other_frame):
+        """
+        Establishes a bi-directional link between this frame and another frame.
+        """
+        if other_frame not in self.linked_frames:
+            self.linked_frames.append(other_frame)
+            other_frame.linked_frames.append(self)
+            self.log_event(f"Linked to {other_frame.frame_id}")
+            other_frame.log_event(f"Linked to {self.frame_id}")
+    
+    def add_sub_frame(self, sub_frame):
+        self.sub_frames.append(sub_frame)
+        self.log_event(f"Added sub-frame {sub_frame.frame_id} to {self.frame_id}")
+    
+    def adjust_parameters_and_normalize_nodes(self):
+        """
+        Adjusts the frame's scale and phase_offset based on node states 
+        and normalizes node states to restore stability.
+        """
+        total_state = sum(n.state for n in self.nodes)
+        adjustment_factor = 0.95  # Example scaling factor
+        old_scale = self.scale
+        self.scale *= adjustment_factor
+        self.phase_offset += math.pi / 180  # Slight phase shift
+        
+        self.log_event(
+            f"Adjusted parameters: scale {old_scale:.3f} -> {self.scale:.3f}, "
+            f"phase_offset increased by {math.pi / 180:.6f}"
+        )
+        
+        # Normalize node states to reduce total state
+        for node in self.nodes:
+            old_state = node.state
+            node.state *= 0.95  # Example normalization factor
+            self.log_event(f"Normalized {node.label}: state {old_state:.3f} -> {node.state:.3f}")
+        
+        # Adjust sub-frames recursively
+        for sub_frame in self.sub_frames:
+            sub_frame.adjust_parameters_and_normalize_nodes()
+        
+        # Propagate adjustments to linked frames
+        self.propagate_adjustment()
+    
+    def propagate_adjustment(self):
+        """
+        Propagates parameter adjustments to linked frames, including node normalization in linked frames.
+        """
+        for linked_frame in self.linked_frames:
+            old_scale = linked_frame.scale
+            linked_frame.scale *= 0.98  # Example adjustment
+            old_phase = linked_frame.phase_offset
+            linked_frame.phase_offset -= math.pi / 360  # Slight phase shift
+
+            self.log_event(
+                f"Propagated adjustment to {linked_frame.frame_id} "
+                f"(scale {old_scale:.3f}->{linked_frame.scale:.3f}, "
+                f"phase {old_phase:.3f}->{linked_frame.phase_offset:.3f})"
+            )
+            linked_frame.log_event(
+                f"Received propagated adjustment from {self.frame_id} "
+                f"(scale {old_scale:.3f}->{linked_frame.scale:.3f}, "
+                f"phase {old_phase:.3f}->{linked_frame.phase_offset:.3f})"
+            )
+            # Linked frames also normalize their nodes
+            linked_frame.normalize_nodes()
+    
+    def normalize_nodes(self, factor=0.95):
+        """
+        Normalizes node states to reduce total state within the frame.
+        """
+        for node in self.nodes:
+            old_state = node.state
+            node.state *= factor
+            self.log_event(f"Normalized {node.label}: state {old_state:.3f} -> {node.state:.3f}")
+    
+    def __repr__(self):
+        return (f"<ReferenceFrame {self.frame_id}, "
+                f"scale={self.scale:.3f}, phase_offset={self.phase_offset:.3f}, "
+                f"nodes={len(self.nodes)}, boundaries={len(self.boundaries)}, "
+                f"sub_frames={len(self.sub_frames)}>"
+        )
+    
+    def log_event(self, message):
+        """
+        Logs an event via the main scenario's logger.
+        """
+        if self.logger:
+            self.logger(f"[Frame {self.frame_id}] {message}")
+        else:
+            print(f"[Frame {self.frame_id} LOG]", message)
+
+class BoundaryLoop:
+    def __init__(self, boundary_id):
+        """
+        Represents a closed boundary with:
+          - a unique boundary_id
+          - a list of DistinctionNodes it encloses
+          - a 'phase_coherence' measure
+          - a sealed status
+        """
+        self.boundary_id = boundary_id
+        self.nodes = []
+        self.phase_coherence = 1.0
+        self.sealed = True
+    
+    def add_node(self, node):
+        self.nodes.append(node)
+    
+    def perturb(self, amount):
+        """
+        Reduces phase coherence by 'amount', potentially unsealing if below threshold.
+        """
+        self.phase_coherence -= amount
+        if self.phase_coherence < 0.618:
+            self.sealed = False
+    
+    def seal_boundary(self):
+        """
+        Restores boundary coherence above threshold, re-sealing it.
+        """
+        self.phase_coherence = 1.0
+        self.sealed = True
+    
+    def auto_reseal(self):
+        """
+        Automatically attempts to re-seal the boundary if unsealed.
+        """
+        if not self.sealed and self.phase_coherence >= 0.618:
+            self.seal_boundary()
+            return True
+        return False
+    
+    def __repr__(self):
+        return (
+            f"<BoundaryLoop {self.boundary_id}, sealed={self.sealed}, "
+            f"coherence={self.phase_coherence:.3f}, nodes={len(self.nodes)}>"
+        )
+
+class OmniscriptTestScenarioComplexEnhanced:
+    """
+    An extended complex scenario with:
+      - More nodes and frames across multiple iterations
+      - Repeated feedback and perturbation cycles
+      - Dynamic boundary resealing
+      - Node state normalization to address frame instability
+      - Hierarchical frames and nested boundaries
+      - Enhanced logging for deeper traceability
+    """
+    
+    def __init__(self):
+        self.nodes = []
+        self.frames = []
+        self.boundaries = []
+        self.log = []
+        self.frame1 = None  # Initialize frame1 as an instance attribute
+    
+    # -------------------------
+    # STEP 1: INITIALIZATION
+    # -------------------------
+    
+    def initialize_scenario(self):
+        """
+        Creates an initial set of nodes and a single frame & boundary.
+        Starts with 2 nodes as the axiomatic distinction.
+        """
+        # Create initial nodes
+        nodeA = DistinctionNode(label='NodeA', state=0.0)
+        nodeB = DistinctionNode(label='NodeB', state=0.05)
+        self.nodes.extend([nodeA, nodeB])
+        
+        # Create the first reference frame
+        self.frame1 = ReferenceFrame(
+            frame_id='Frame1',
+            origin_node=nodeA,
+            scale=1.0,
+            phase_offset=math.pi / PHI,
+            logger=self.log_event
+        )
+        # Add nodes A and B to this frame
+        self.frame1.add_node(nodeA)
+        self.frame1.add_node(nodeB)
+        
+        # Create the first boundary loop around nodes A and B
+        boundary1 = BoundaryLoop(boundary_id='Boundary1')
+        boundary1.add_node(nodeA)
+        boundary1.add_node(nodeB)
+        
+        self.frame1.add_boundary(boundary1)
+        
+        # Keep references
+        self.frames.append(self.frame1)
+        self.boundaries.append(boundary1)
+        
+        self.log_event("Initialized scenario with 2 nodes, 1 reference frame, 1 boundary.")
+    
+    # -------------------------
+    # STEP 2: EXPANSION / GROWTH
+    # -------------------------
+    
+    def grow_scenario(self, extra_node_count=2):
+        """
+        Introduces additional frames, boundaries, and nodes to increase complexity.
+        The 'extra_node_count' parameter determines how many nodes to add each time.
+        """
+        # Create new nodes
+        new_nodes = []
+        for i in range(extra_node_count):
+            label = f"NodeX{i+1}"
+            state = 0.1 + 0.05 * i
+            node = DistinctionNode(label=label, state=state)
+            self.nodes.append(node)
+            new_nodes.append(node)
+        
+        # Create a new reference frame for the new nodes
+        for node in new_nodes:
+            frame_id = f"Frame_{len(self.frames)+1}"
+            new_frame = ReferenceFrame(
+                frame_id=frame_id,
+                origin_node=node,
+                scale=PHI, 
+                phase_offset=math.pi / 2.0,
+                logger=self.log_event
+            )
+            new_frame.add_node(node)
+            
+            # For illustration, link to NodeB (self.nodes[1]) if present
+            if len(self.nodes) > 1:
+                new_frame.add_node(self.nodes[1])  # NodeB
+            
+            # Create boundary for the new frame
+            boundary_id = f"Boundary_{len(self.boundaries)+1}"
+            new_boundary = BoundaryLoop(boundary_id=boundary_id)
+            new_boundary.add_node(node)
+            new_frame.add_boundary(new_boundary)
+            
+            self.frames.append(new_frame)
+            self.boundaries.append(new_boundary)
+            
+            # Create a nested sub-frame within the new frame
+            sub_frame_id = f"SubFrame_{len(self.frames)+1}"
+            sub_frame = ReferenceFrame(
+                frame_id=sub_frame_id,
+                origin_node=self.nodes[1],  # NodeB
+                scale=0.5,
+                phase_offset=math.pi / 4,
+                logger=self.log_event
+            )
+            sub_frame.add_node(self.nodes[1])  # NodeB
+            
+            boundary_sub = BoundaryLoop(boundary_id=f"Boundary_{len(self.boundaries)+1}")
+            boundary_sub.add_node(self.nodes[1])  # NodeB
+            sub_frame.add_boundary(boundary_sub)
+            self.boundaries.append(boundary_sub)
+            
+            new_frame.add_sub_frame(sub_frame)
+            
+            # Link new frame to the first frame for inter-frame interactions
+            self.frame1.link_frame(new_frame)
+            
+            self.log_event(
+                f"Grew scenario by adding {extra_node_count} new node(s), "
+                f"added {frame_id}, nested {sub_frame_id}."
+            )
+    
+    # -------------------------
+    # STEP 3: VALIDATION
+    # -------------------------
+    
+    def check_phase_coherence(self):
+        """
+        C₁: Check boundary coherence remains above 0.618
+        """
+        all_ok = True
+        for b in self.boundaries:
+            if b.phase_coherence < 0.618:
+                self.log_event(f"Boundary {b.boundary_id} lost coherence ({b.phase_coherence:.3f}).")
+                all_ok = False
+        return all_ok
+    
+    def check_frame_stability(self, eps=0.05):
+        """
+        C₂: Approximate frame stability by summing absolute node states 
+        and comparing to a threshold scaled by total node count.
+        """
+        total_states = sum(abs(n.state) for n in self.nodes)
+        threshold = eps * len(self.nodes)
+        if total_states > threshold:
+            self.log_event(
+                f"Instability detected: total node states={total_states:.3f} > threshold={threshold:.3f}"
+            )
+            # Attempt to adjust frames for self-correction
+            for frame in self.frames:
+                frame.adjust_parameters_and_normalize_nodes()
+            return False
+        return True
+    
+    def check_pattern_resonance(self):
+        """
+        C₃: For demonstration, we sum node states and ensure they haven't diverged 
+        beyond an arbitrary cutoff. This tests whether expansions remain bounded.
+        """
+        sum_pn = sum(n.state for n in self.nodes)
+        if sum_pn > 10.0:  # Increased cutoff to accommodate more nodes
+            self.log_event(
+                f"Pattern resonance diverged: sum of node states={sum_pn:.3f}"
+            )
+            return False
+        return True
+    
+    # -------------------------
+    # STEP 4: PERTURBATIONS
+    # -------------------------
+    
+    def perturb_scenario(self, boundary_perturb=0.02, node_shift=0.01):
+        """
+        Introduce a boundary perturbation and shift node states to test stability.
+        """
+        # Perturb all boundaries
+        for b in self.boundaries:
+            b.perturb(boundary_perturb)
+        
+        # Shift node states
+        for n in self.nodes:
+            n.state += node_shift
+        
+        self.log_event(
+            f"Perturbed boundaries by {boundary_perturb:.3f}, "
+            f"shifted node states by {node_shift:.3f}."
+        )
+    
+    def seal_boundaries(self):
+        """
+        Attempt to re-seal any boundaries whose phase_coherence dropped below threshold.
+        """
+        for b in self.boundaries:
+            if not b.sealed:
+                b.seal_boundary()
+                self.log_event(f"Re-sealed boundary {b.boundary_id}.")
+    
+    # -------------------------
+    # STEP 5: MULTI-ITERATION TEST SEQUENCE
+    # -------------------------
+    
+    def run_test_sequence(self, iterations=5):
+        """
+        Perform multiple iterations of:
+          1. Initialization (only on the first iteration)
+          2. Expand scenario (with extra nodes scaled by phi)
+          3. Validate
+          4. Perturb
+          5. Re-Validate
+          6. Attempt re-seals if needed
+        """
+        current_extra_node_count = 2  # Starting with 2 nodes per iteration
+        
+        for i in range(iterations):
+            self.log_event(f"===== Starting iteration {i+1} of {iterations} =====")
+            
+            # Only initialize the very first time
+            if i == 0:
+                self.initialize_scenario()
+            # Grow scenario each iteration with new nodes scaled by phi
+            self.grow_scenario(extra_node_count=current_extra_node_count)
+            
+            # Update the number of extra nodes for the next iteration
+            current_extra_node_count = int(round(current_extra_node_count * PHI))
+            
+            # Validate pre-perturb
+            ok_pc = self.check_phase_coherence()
+            ok_fs = self.check_frame_stability()
+            ok_pr = self.check_pattern_resonance()
+            self.log_event(
+                f"Iteration {i+1} pre-perturb => "
+                f"PhaseOK:{ok_pc}, FrameOK:{ok_fs}, ResonanceOK:{ok_pr}"
+            )
+            
+            # Perturbation: slightly increase perturbation each iteration
+            boundary_perturb = 0.03 + 0.01 * i
+            node_shift = 0.02 + 0.01 * i
+            self.perturb_scenario(boundary_perturb=boundary_perturb, node_shift=node_shift)
+            
+            # Re-validate
+            ok_pc2 = self.check_phase_coherence()
+            ok_fs2 = self.check_frame_stability()
+            ok_pr2 = self.check_pattern_resonance()
+            self.log_event(
+                f"Iteration {i+1} post-perturb => "
+                f"PhaseOK:{ok_pc2}, FrameOK:{ok_fs2}, ResonanceOK:{ok_pr2}"
+            )
+            
+            # Attempt re-seals if needed
+            if not ok_pc2:
+                self.seal_boundaries()
+                ok_pc3 = self.check_phase_coherence()
+                self.log_event(f"After re-seal => PhaseOK:{ok_pc3}")
+            else:
+                for boundary in self.boundaries:
+                    if boundary.auto_reseal():
+                        self.log_event(f"Automatically re-sealed {boundary.boundary_id}.")
+        
+        self.log_event("Extended test sequence completed.")
+        self.print_summary()
+    
+    def print_summary(self):
+        print("\n==== FINAL SCENARIO STRUCTURES ====")
+        for idx, nd in enumerate(self.nodes):
+            print(f"Node {idx+1}: {nd}")
+        for idx, fr in enumerate(self.frames):
+            print(f"Frame {idx+1}: {fr}")
+        for idx, bd in enumerate(self.boundaries):
+            print(f"Boundary {idx+1}: {bd}")
+    
+    def log_event(self, message):
+        """
+        Records a textual event for console and log list.
+        """
+        self.log.append(message)
+        print("[LOG]", message)
+
+def main():
+    """
+    Entry point for running an extended complexity and duration test sequence.
+    Adjust 'iterations' as needed.
+    """
+    scenario = OmniscriptTestScenarioComplexEnhanced()
+    # Example: 5 iterations, node addition scaled by phi each time starting from 2
+    scenario.run_test_sequence(iterations=5)
+
+if __name__ == "__main__":
+    main()
